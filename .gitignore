@@ -1,0 +1,30 @@
+# Binaries and executables
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+pulse-backend
+
+# Test coverage files
+*.out
+*.test
+*.prof
+
+# Dependency directories (only if vendor/ is used locally)
+vendor/
+
+# Environment configurations (sensitive keys)
+.env
+.env.local
+
+# IDEs and editors configurations
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
