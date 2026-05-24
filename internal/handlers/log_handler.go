@@ -40,6 +40,13 @@ func (h *LogHandler) IngestLog(c *gin.Context) {
 	payload.ID = primitive.NewObjectID()
 	payload.Timestamp = time.Now()
 
+	// Normalize latency/latencyMs fields so both client and SDK conventions work perfectly
+	if payload.Latency == 0 && payload.LatencyMs > 0 {
+		payload.Latency = payload.LatencyMs
+	} else if payload.LatencyMs == 0 && payload.Latency > 0 {
+		payload.LatencyMs = payload.Latency
+	}
+
 	if !h.queue.Enqueue(payload) {
 		// Queue full — shed load gracefully
 		c.JSON(http.StatusServiceUnavailable, gin.H{
