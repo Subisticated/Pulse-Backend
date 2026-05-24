@@ -160,7 +160,7 @@ func buildPrompt(incident *models.Incident, logs []models.LogEvent) string {
 	sb.WriteString(fmt.Sprintf("Severity: %s\n", incident.Severity))
 	sb.WriteString(fmt.Sprintf("Description: %s\n", incident.Description))
 	sb.WriteString(fmt.Sprintf("Service: %s (%s)\n", incident.Service, incident.Environment))
-	sb.WriteString(fmt.Sprintf("Created: %s\n\n", incident.CreatedAt.Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("Created: %s\n\n", incident.StartTime.Format(time.RFC3339)))
 	sb.WriteString("Recent logs (up to 10):\n")
 	for i, l := range logs {
 		if i >= 10 {
@@ -203,7 +203,7 @@ func (s *AIService) localAnalysis(incident *models.Incident, logs []models.LogEv
 			"Check database connection pool limits and increase max connections",
 			"Inspect downstream dependencies for timeouts or outages",
 			"Add circuit breaker patterns to prevent cascade failures",
-			"Review recent deployments around " + incident.CreatedAt.Format("2006-01-02 15:04"),
+			"Review recent deployments around " + incident.StartTime.Format("2006-01-02 15:04"),
 		}
 
 	case "latency_spike":

@@ -1,259 +1,453 @@
-# Pulse Backend
+# 🚀 Pulse Backend
 
-Production-ready Go service powering an AI-driven API monitoring platform. Ingests telemetry logs, runs real-time incident detection, delivers analytics, and performs AI root cause analysis.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Language | Go 1.20+ |
-| Framework | Gin |
-| Database | MongoDB |
-| Logging | Zerolog |
-| WebSockets | gorilla/websocket |
-| Config | godotenv |
-| AI RCA | OpenAI gpt-3.5-turbo |
-| Alerts | Discord Webhook |
-
----
-
-## Quickstart
-
-### 1. Prerequisites
-- Go 1.20+
-- MongoDB (local or Atlas)
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```env
-PORT=8080
-MONGO_URI=mongodb://localhost:27017
-DB_NAME=pulse
-OPENAI_API_KEY=sk-...          # optional — uses local analysis if omitted
-DISCORD_WEBHOOK=https://discord.com/api/webhooks/...  # optional
-```
-
-### 3. Install dependencies
-
-```bash
-go mod tidy
-```
-
-### 4. Run
-
-```bash
-go run cmd/server/main.go
-```
-
----
-
-## API Reference
-
-### Health Check
-
-```
-GET /
-```
-```json
-{ "status": "ok", "service": "pulse-backend" }
-```
-
----
-
-### Ingest Log
-
-```
-POST /api/v1/logs
-```
-
-**Body:**
-```json
-{
-  "endpoint": "/payment",
-  "method": "POST",
-  "status": 500,
-  "latency": 1200,
-  "error": "DB timeout",
-  "service": "checkout",
-  "environment": "production"
-}
-```
-
-**Response `201`:**
-```json
-{
-  "message": "Log ingested successfully",
-  "data": { "id": "...", "timestamp": "...", ... }
-}
-```
-
-> Incident detection runs **asynchronously** after each log is saved.
-
----
-
-### Get Metrics
-
-```
-GET /api/v1/metrics
-```
-
-**Response `200`:**
-```json
-{
-  "totalRequests": 1200,
-  "errorRate": 4.3,
-  "avgLatency": 220,
-  "requestsLastHour": 400,
-  "errorsLastHour": 15
-}
-```
-
-All values computed from MongoDB aggregations in real time.
-
----
-
-### Get Incidents
-
-```
-GET /api/v1/incidents
-GET /api/v1/incidents?resolved=false   # active only
-GET /api/v1/incidents?resolved=true    # resolved only
-```
-
-**Response `200`:**
-```json
-[
-  {
-    "id": "665abc...",
-    "severity": "Critical",
-    "cause": "high_error_rate",
-    "description": "6 HTTP 5xx errors in the last 5 minutes on service 'checkout'",
-    "service": "checkout",
-    "environment": "production",
-    "related_logs": ["665aaa...", "665bbb..."],
-    "resolved": false,
-    "createdAt": "2026-05-23T17:01:00Z"
-  }
-]
-```
-
----
-
-### Resolve Incident
-
-```
-PATCH /api/v1/incidents/:id/resolve
-```
-
-Sets `resolved: true` and records `resolvedAt` timestamp.
-
-**Response `200`:** Updated incident document.
-
----
-
-### AI Root Cause Analysis
-
-```
-POST /api/v1/rca
-```
-
-**Body:**
-```json
-{ "incidentId": "665abc..." }
-```
-
-**Response `200`:**
-```json
-{
-  "incidentId": "665abc...",
-  "cause": "DB connection exhaustion",
-  "confidence": 89,
-  "evidence": [
-    "Multiple HTTP 5xx responses detected in service 'checkout'",
-    "Error pattern: DB timeout"
-  ],
-  "fixes": [
-    "Check database connection pool limits and increase max connections",
-    "Inspect downstream dependencies for timeouts or outages",
-    "Add circuit breaker patterns to prevent cascade failures"
-  ],
-  "generatedAt": "2026-05-23T17:05:00Z"
-}
-```
-
-Uses OpenAI `gpt-3.5-turbo` when `OPENAI_API_KEY` is set, otherwise uses deterministic local analysis.
-
----
-
-### WebSocket — Real-time Events
-
-```
-WS /ws
-```
-
-Connect with any WebSocket client. Events are pushed whenever a new incident is detected:
-
-```json
-{
-  "type": "incident",
-  "severity": "Critical",
-  "cause": "high_error_rate",
-  "service": "checkout"
-}
-```
-
-**JavaScript example:**
-```js
-const ws = new WebSocket("ws://localhost:8080/ws");
-ws.onmessage = (e) => {
-  const event = JSON.parse(e.data);
-  console.log("New incident:", event);
-};
-```
-
----
-
-## Incident Detection Rules
-
-The detector runs **asynchronously** after every log ingestion and checks 3 rules:
-
-| Rule | Trigger | Severity |
-|---|---|---|
-| Error Count | >5 HTTP 5xx in last 5 minutes | Critical |
-| Error Rate | >10% error rate in last 5 minutes | Critical |
-| Latency Spike | Single request latency >1000ms | Medium |
-
-Deduplication: only one active incident per `(service, environment, cause)` tuple.
+AI-powered API monitoring and observability backend. High-throughput telemetry ingestion pipeline with real-time incident detection, Groq AI root cause analysis, and a fully-featured dashboard API.
 
 ---
 
 ## Architecture
 
 ```
-cmd/server/main.go          — entry point, wires DB + Hub + Router
-internal/
-  config/                   — env loading, MongoDB connection
-  models/                   — LogEvent, Incident structs
-  middleware/                — Zerolog request logger
-  detector/                 — rule-based anomaly detector (3 rules)
-  services/                 — IngestionService, MetricsService, IncidentService
-  handlers/                 — Gin HTTP + WebSocket handlers
-  routes/                   — DI + route registration
-  ai/                       — OpenAI RCA + local fallback
-  alerts/                   — Discord webhook integration
-  wsocket/                  — gorilla/websocket Hub
+SDK / Client
+    ↓  POST /api/v1/logs
+Gin HTTP Server (Release Mode)
+    ↓  non-blocking enqueue
+Async Log Queue (8192-slot buffered channel)
+    ↓  InsertMany every 50 logs or 500ms
+MongoDB Atlas (indexed collections)
+    ↓  parallel
+Rule-based Incident Detector → WebSocket Hub → Dashboard
+    ↓  on demand
+Groq AI RCA (llama-3.1-8b-instant)
 ```
 
 ---
 
-## Discord Alerts
+## Quick Start
 
-Set `DISCORD_WEBHOOK` in `.env` to receive rich embeds in your Discord channel when a **Critical** incident is detected. Medium/Low incidents are skipped.
+```bash
+cp .env.example .env
+# Fill in MONGO_URI and GROQ_API_KEY
+
+go run cmd/server/main.go
+```
+
+Server starts on `http://localhost:8080`
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `PORT` | No | HTTP port (default: `8080`) |
+| `MONGO_URI` | **Yes** | MongoDB Atlas connection string |
+| `DB_NAME` | No | MongoDB database name (default: `pulse`) |
+| `GROQ_API_KEY` | No | Groq API key for AI RCA (falls back to local analysis) |
+| `DISCORD_WEBHOOK` | No | Discord webhook URL for critical incident alerts |
+
+---
+
+## API Reference
+
+### Differentiation by API Type
+
+| Type | Prefix | Consumers |
+|---|---|---|
+| **Telemetry Ingestion** | `POST /api/v1/logs` | SDK only |
+| **Dashboard Data** | `GET /api/v1/*` | Frontend dashboard |
+| **AI Diagnostics** | `POST /api/v1/rca` | Dashboard + SDK |
+| **Demo/Chaos** | `/chaos/*` | Demo UI only |
+| **Real-time** | `ws://host/ws` | Dashboard WebSocket |
+
+---
+
+### GET /api/v1/health
+Health check for dashboard to detect backend availability.
+
+**Response 200:**
+```json
+{
+  "status": "ok",
+  "version": "2.0.0",
+  "uptime": 12345
+}
+```
+
+---
+
+### POST /api/v1/logs — SDK Endpoint
+**Primary SDK endpoint.** Accepts structured telemetry from the Pulse Node/Python SDK. Non-blocking — returns `202 Accepted` immediately while persisting in background.
+
+**Request body:**
+```json
+{
+  "endpoint": "/api/cart/checkout",
+  "method": "POST",
+  "status": 504,
+  "latency": 1200,
+  "error": "upstream timeout",
+  "service": "checkout",
+  "environment": "production",
+  "traceId": "abc-xyz-123",
+  "meta": { "userId": "user_123", "region": "us-east-1" }
+}
+```
+
+> `latencyMs` is also accepted as a field alias for `latency`.
+
+**Response 202:**
+```json
+{
+  "id": "664fa721be263ad20b601ad8",
+  "timestamp": "2026-05-24T10:00:00Z",
+  "queued": true
+}
+```
+
+**Error responses:**
+- `400 Bad Request` — missing required fields (`endpoint`, `method`, `status`)
+- `503 Service Unavailable` — queue full (retry after brief backoff)
+
+---
+
+### GET /api/v1/metrics
+Aggregated time-series and current metrics for the dashboard.
+
+**Query params (all optional):**
+
+| Param | Format | Default | Description |
+|---|---|---|---|
+| `start` | ISO 8601 | 5 min ago | Window start |
+| `end` | ISO 8601 | now | Window end |
+
+**Response 200:**
+```json
+{
+  "start": "2026-05-24T10:00:00Z",
+  "end": "2026-05-24T10:05:00Z",
+  "rps": 3.4,
+  "rpm": 204.0,
+  "totalRequests": 1024,
+  "errorRate": 4.2,
+  "avgLatencyMs": 312.0,
+  "p95LatencyMs": 980.0,
+  "requestsLastHour": 4800,
+  "errorsLastHour": 192,
+  "latencySeries": [
+    { "t": 1748080800000, "value": 200 },
+    { "t": 1748080860000, "value": 312 }
+  ],
+  "errorSeries": [
+    { "t": 1748080800000, "value": 2 },
+    { "t": 1748080860000, "value": 5 }
+  ],
+  "byService": {
+    "payments":  { "errorRate": 12.3, "avgLatencyMs": 1200.0 },
+    "checkout":  { "errorRate": 1.4,  "avgLatencyMs": 340.0  }
+  }
+}
+```
+
+- `latencySeries` and `errorSeries` are aligned 1-minute buckets.
+- `t` values are Unix epoch **milliseconds**.
+
+---
+
+### GET /api/v1/incidents
+Recent and active incidents for the timeline and incident cards.
+
+**Query params:**
+
+| Param | Values | Default | Description |
+|---|---|---|---|
+| `status` | `active` \| `resolved` \| `all` | `all` | Filter by incident status |
+| `limit` | integer | `50` | Maximum results |
+| `since` | ISO 8601 | — | Only incidents after this time |
+
+**Response 200:**
+```json
+[
+  {
+    "id": "664fa721be263ad20b601ad8",
+    "title": "Error spike detected on checkout",
+    "detail": "6 HTTP 5xx errors in the last 5 minutes on service 'checkout'",
+    "severity": "critical",
+    "status": "active",
+    "service": "checkout",
+    "services": ["checkout"],
+    "environment": "production",
+    "startTime": "2026-05-24T10:02:12Z",
+    "endTime": null,
+    "resolved": false,
+    "links": {
+      "rca": "/api/v1/rca?incident=664fa721be263ad20b601ad8"
+    }
+  }
+]
+```
+
+---
+
+### PATCH /api/v1/incidents/:id/resolve
+Mark an active incident as resolved.
+
+**Response 200:** Full updated incident object (same shape as incidents list item).
+
+---
+
+### POST /api/v1/rca
+Request an AI-generated root cause analysis from Groq Llama-3.1.
+
+**Request body:**
+```json
+{
+  "incidentId": "664fa721be263ad20b601ad8",
+  "requester": "ui"
+}
+```
+
+**Response 200:**
+```json
+{
+  "incidentId": "664fa721be263ad20b601ad8",
+  "rca": {
+    "summary": "Database connection timeout due to high load on checkout service",
+    "probableRootCause": "Database connection timeout due to high load on checkout service",
+    "evidence": [
+      "DB connection timeout after 3000ms",
+      "high error rate on checkout service"
+    ],
+    "suggestedFix": "Increase database connection pool size; Implement circuit breaker pattern",
+    "confidence": 0.90
+  },
+  "generatedAt": "2026-05-24T10:02:20Z"
+}
+```
+
+> `confidence` is a `0.0–1.0` float. Falls back to local deterministic analysis if `GROQ_API_KEY` is not set.
+
+---
+
+### GET /api/v1/topology
+Service dependency graph for topology view.
+
+**Response 200:**
+```json
+{
+  "services": [
+    {
+      "id": "payments",
+      "name": "Payments",
+      "status": "degraded",
+      "meta": { "avgLatencyMs": 1200, "totalRequests": 340, "errorCount": 42 }
+    },
+    {
+      "id": "checkout",
+      "name": "Checkout",
+      "status": "critical",
+      "meta": { "avgLatencyMs": 340, "totalRequests": 512, "errorCount": 61 }
+    }
+  ],
+  "edges": [
+    { "from": "checkout", "to": "payments", "type": "http", "avgLatencyMs": 1200 }
+  ]
+}
+```
+
+**Node status values:** `healthy` | `degraded` | `critical` | `unknown`
+
+---
+
+### POST /chaos/:scenario _(Demo only)_
+Activate a named chaos scenario for dashboard demos.
+
+**Optional body:**
+```json
+{ "duration": 60 }
+```
+
+**Response 200:**
+```json
+{ "mode": "payment_failure", "expiresAt": "2026-05-24T10:03:12Z", "expiresIn": 60 }
+```
+
+**Built-in scenarios:** `payment_failure` | `latency_spike` | `error_storm` | any custom string.
+
+---
+
+### GET /chaos/status _(Demo only)_
+Return the currently active chaos scenario.
+
+**Response 200:**
+```json
+{ "mode": "payment_failure", "expiresAt": "2026-05-24T10:03:12Z" }
+```
+
+Returns `{ "mode": "none" }` when no scenario is active.
+
+---
+
+### WebSocket: `ws://host/ws`
+Real-time push updates for incidents and metrics.
+
+**Server → Client message envelope:**
+```json
+{
+  "type": "incident",
+  "payload": {
+    "id": "664fa721...",
+    "title": "Error spike detected on checkout",
+    "severity": "critical",
+    "status": "active",
+    "services": ["checkout"],
+    "startTime": "2026-05-24T10:02:12Z"
+  }
+}
+```
+
+**`type` values:** `incident` | `metrics` | `topology` | `event`
+
+---
+
+## Error Response Format
+
+All error responses use a consistent envelope:
+
+```json
+{
+  "error": {
+    "code": "INVALID_PARAM",
+    "message": "start must be ISO 8601 e.g. 2026-05-24T10:00:00Z"
+  }
+}
+```
+
+| HTTP Status | Code | Meaning |
+|---|---|---|
+| `400` | `INVALID_PARAM` / `MISSING_FIELD` | Bad request / validation |
+| `404` | `NOT_FOUND` | Resource not found |
+| `500` | `*_ERROR` | Internal processing error |
+| `503` | `QUEUE_FULL` | Log queue at capacity — retry |
+
+---
+
+## SDK Integration Notes
+
+### Required SDK Changes
+
+The SDK must be updated to match this backend's ingestion contract:
+
+#### 1. Endpoint URL
+```
+POST http://<host>:8080/api/v1/logs
+```
+
+#### 2. Accept HTTP 202 as success
+The backend returns `202 Accepted` (not `201 Created`) for queued logs. SDK retry logic must treat both `201` and `202` as success.
+
+#### 3. Payload field names
+| SDK field | Backend field | Notes |
+|---|---|---|
+| `latencyMs` | `latency` or `latencyMs` | Both accepted |
+| `traceId` | `traceId` | Optional, pass-through |
+| `meta` | `meta` | Optional arbitrary object |
+
+#### 4. Required fields
+`endpoint`, `method`, `status` are required. All others are optional but recommended for full dashboard functionality.
+
+#### 5. Error field convention
+Only include `error` field when `status >= 500`. Set to a descriptive error message string.
+
+#### 6. Recommended SDK payload shape
+```js
+{
+  endpoint: req.path,           // string, required
+  method: req.method,           // string, required
+  status: res.statusCode,       // number, required
+  latency: responseTimeMs,      // number (ms)
+  service: "my-service",        // string
+  environment: "production",    // string
+  error: err?.message ?? "",    // string, only if status >= 500
+  traceId: req.headers["x-trace-id"] ?? "",
+  meta: { userId: req.user?.id }
+}
+```
+
+#### 7. Graceful back-pressure handling
+If the backend returns `503`, the SDK should buffer the event locally and retry after `1–5s` with exponential backoff (max 3 retries).
+
+---
+
+## Performance Benchmarks
+
+| Scenario | Result |
+|---|---|
+| API acceptance throughput | **2,114 RPS** (50 workers, 1500 logs) |
+| Raw queue throughput | **~188M ops/sec** (local benchmark) |
+| Handler latency | `< 1ms` (async queue) |
+| Persistence rate | **100%** (verified via Mongo count) |
+| Batch size | 50 logs per `InsertMany` |
+| Flush interval | 500ms partial-batch timer |
+
+---
+
+## MongoDB Collections & Indexes
+
+### `logs`
+| Index | Fields | Purpose |
+|---|---|---|
+| `idx_logs_timestamp` | `timestamp DESC` | Primary sort |
+| `idx_logs_status` | `status` | Error queries |
+| `idx_logs_service_env_ts` | `service, environment, timestamp DESC` | Sliding window |
+| `idx_logs_service_status_ts` | `service, status, timestamp DESC` | Error rate |
+| `idx_logs_endpoint` | `endpoint` | Endpoint grouping |
+
+### `incidents`
+| Index | Fields | Purpose |
+|---|---|---|
+| `idx_incidents_dedup` | `service, environment, cause, resolved` | Deduplication |
+| `idx_incidents_created_at` | `created_at DESC` | List queries |
+| `idx_incidents_resolved` | `resolved` | Status filter |
+
+---
+
+## Project Structure
+
+```
+pulse-backend/
+├── cmd/server/main.go              # Entry point, graceful shutdown
+├── internal/
+│   ├── ai/rca.go                   # Groq AI RCA integration
+│   ├── alerts/discord.go           # Discord webhook alerts
+│   ├── config/db.go                # MongoDB connection pool
+│   ├── config/env.go               # Environment config
+│   ├── detector/incident_detector.go # Rule-based anomaly engine
+│   ├── handlers/
+│   │   ├── log_handler.go          # POST /api/v1/logs
+│   │   ├── metrics_handler.go      # GET /api/v1/metrics
+│   │   ├── incident_handler.go     # GET/PATCH incidents + RCA
+│   │   ├── topology_handler.go     # GET /api/v1/topology
+│   │   ├── chaos_handler.go        # /chaos/* demo endpoints
+│   │   └── ws_handler.go           # WebSocket upgrade
+│   ├── middleware/logger.go        # Zerolog request logger
+│   ├── models/log.go               # LogEvent model
+│   ├── models/incident.go          # Incident model
+│   ├── queue/queue.go              # Async batch ingestion queue
+│   ├── routes/routes.go            # Router + DI wiring
+│   ├── services/
+│   │   ├── ingestion_service.go    # Queue wire-up
+│   │   ├── metrics_service.go      # Metrics aggregations
+│   │   ├── incident_service.go     # Incident CRUD
+│   │   ├── topology_service.go     # Service graph derivation
+│   │   ├── chaos_service.go        # Demo chaos state
+│   │   ├── indexes.go              # MongoDB index management
+│   │   └── helpers.go              # Shared type helpers
+│   └── wsocket/hub.go              # WebSocket hub
+└── scratch/                        # Dev validation scripts
+    ├── e2e/main.go                 # Full pipeline E2E test
+    ├── stress/main.go              # 1500+ log stress test
+    ├── validate/main.go            # Persistence verification
+    ├── groq/main.go                # Groq API connectivity test
+    ├── mongodb/main.go             # MongoDB connectivity test
+    └── count/main.go               # Document counter
+```

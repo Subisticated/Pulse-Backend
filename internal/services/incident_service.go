@@ -23,17 +23,25 @@ func NewIncidentService(db *mongo.Database) *IncidentService {
 	return &IncidentService{db: db}
 }
 
-// GetIncidents queries all incidents, optionally filtered by resolved status.
-// ?resolved=true | ?resolved=false — omit param for all.
-func (s *IncidentService) GetIncidents(ctx context.Context, resolvedFilter string) ([]models.Incident, error) {
+// GetIncidents queries incidents with optional resolved, limit, and since filters
+func (s *IncidentService) GetIncidents(ctx context.Context, resolvedFilter string, limit int64, since *time.Time) ([]models.Incident, error) {
 	filter := bson.M{}
 	if resolvedFilter == "true" {
 		filter["resolved"] = true
 	} else if resolvedFilter == "false" {
 		filter["resolved"] = false
 	}
+	if since != nil {
+		filter["created_at"] = bson.M{"$gte": since}
+	}
+	if limit <= 0 {
+		limit = 50
+	}
 
-	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetLimit(limit)
+
 	cur, err := s.db.Collection("incidents").Find(ctx, filter, opts)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to query incidents")
@@ -44,6 +52,11 @@ func (s *IncidentService) GetIncidents(ctx context.Context, resolvedFilter strin
 	var incidents []models.Incident
 	if err = cur.All(ctx, &incidents); err != nil {
 		return nil, err
+	}
+
+	// Ensure non-nil slices and populate dashboard fields
+	for i := range incidents {
+		populateIncidentDefaults(&incidents[i])
 	}
 	return incidents, nil
 }
@@ -59,6 +72,7 @@ func (s *IncidentService) GetIncidentByID(ctx context.Context, idStr string) (*m
 	if err != nil {
 		return nil, err
 	}
+	populateIncidentDefaults(&incident)
 	return &incident, nil
 }
 
@@ -73,6 +87,7 @@ func (s *IncidentService) ResolveIncident(ctx context.Context, idStr string) (*m
 	update := bson.M{
 		"$set": bson.M{
 			"resolved":    true,
+			"status":      "resolved",
 			"resolved_at": now,
 		},
 	}
@@ -86,6 +101,7 @@ func (s *IncidentService) ResolveIncident(ctx context.Context, idStr string) (*m
 		log.Error().Err(err).Str("id", idStr).Msg("Failed to resolve incident")
 		return nil, err
 	}
+	populateIncidentDefaults(&updated)
 	return &updated, nil
 }
 
@@ -109,4 +125,38 @@ func (s *IncidentService) GetRecentLogsForService(ctx context.Context, service, 
 		return nil, err
 	}
 	return logs, nil
+}
+
+// populateIncidentDefaults ensures computed fields are set for dashboard compatibility
+func populateIncidentDefaults(inc *models.Incident) {
+	if inc.Services == nil {
+		inc.Services = []string{inc.Service}
+	}
+	if inc.Status == "" {
+		if inc.Resolved {
+			inc.Status = "resolved"
+		} else {
+			inc.Status = "active"
+		}
+	}
+	if inc.Title == "" {
+		inc.Title = causeToTitle(inc.Cause, inc.Service)
+	}
+	if inc.Links == nil {
+		inc.Links = &models.IncidentLinks{
+			RCA: "/api/v1/rca?incident=" + inc.ID.Hex(),
+		}
+	}
+}
+
+func causeToTitle(cause, service string) string {
+	titles := map[string]string{
+		"high_error_rate":       "Error spike detected",
+		"high_error_percentage": "High error rate",
+		"latency_spike":         "Latency spike detected",
+	}
+	if t, ok := titles[cause]; ok {
+		return t + " on " + service
+	}
+	return "Anomaly detected on " + service
 }

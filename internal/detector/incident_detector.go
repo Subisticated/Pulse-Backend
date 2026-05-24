@@ -145,7 +145,7 @@ func (d *IncidentDetector) createIncidentIfNew(ctx context.Context, event *model
 		Environment: event.Environment,
 		RelatedLogs: []primitive.ObjectID{event.ID},
 		Resolved:    false,
-		CreatedAt:   time.Now(),
+		StartTime:   time.Now(),
 	}
 
 	if _, err = incidents.InsertOne(ctx, newIncident); err != nil {
