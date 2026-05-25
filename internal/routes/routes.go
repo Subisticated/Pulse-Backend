@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"pulse-backend/internal/agent"
 	"pulse-backend/internal/ai"
 	"pulse-backend/internal/detector"
 	"pulse-backend/internal/handlers"
@@ -51,6 +52,9 @@ func SetupRouter(db *mongo.Database, hub *wsocket.Hub) *gin.Engine {
 	chaosSvc := services.NewChaosService()
 	activeQueue = ingestionSvc.Queue
 
+	// ── Autonomous AI Agent ───────────────────────────────────────────────────
+	pulseAgent := agent.NewPulseAgent(db, hub)
+
 	// ── Handlers ──────────────────────────────────────────────────────────────
 	logH := handlers.NewLogHandler(ingestionSvc.Queue)
 	metricsH := handlers.NewMetricsHandler(metricsSvc)
@@ -58,21 +62,24 @@ func SetupRouter(db *mongo.Database, hub *wsocket.Hub) *gin.Engine {
 	topologyH := handlers.NewTopologyHandler(topologySvc)
 	chaosH := handlers.NewChaosHandler(chaosSvc)
 	wsH := handlers.NewWSHandler(hub)
+	agentH := handlers.NewAgentHandler(pulseAgent)
 
 	// ── Health ────────────────────────────────────────────────────────────────
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "ok",
 			"service": "pulse-backend",
-			"version": "2.0.0",
+			"version": "3.0.0",
 			"uptime":  int(time.Since(startTime).Seconds()),
+			"agent":   "enabled",
 		})
 	})
 	r.GET("/api/v1/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "ok",
-			"version": "2.0.0",
+			"version": "3.0.0",
 			"uptime":  int(time.Since(startTime).Seconds()),
+			"agent":   "enabled",
 		})
 	})
 
@@ -98,6 +105,17 @@ func SetupRouter(db *mongo.Database, hub *wsocket.Hub) *gin.Engine {
 
 		// Service topology graph
 		v1.GET("/topology", topologyH.GetTopology)
+	}
+
+	// ── Autonomous Agent ──────────────────────────────────────────────────────
+	agentGrp := r.Group("/agent")
+	{
+		agentGrp.POST("/analyze", agentH.Analyze)   // trigger investigation
+		agentGrp.GET("/status", agentH.Status)       // current session state
+		agentGrp.GET("/thoughts", agentH.Thoughts)   // real-time reasoning trace
+		agentGrp.GET("/actions", agentH.Actions)     // tool execution log
+		agentGrp.GET("/sessions", agentH.Sessions)   // all investigation sessions
+		agentGrp.POST("/demo", agentH.Demo)          // 90-second autonomous demo
 	}
 
 	// ── Chaos (demo-only, no /api/ prefix per spec) ───────────────────────────
