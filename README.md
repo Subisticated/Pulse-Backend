@@ -309,6 +309,163 @@ Real-time push updates for incidents and metrics.
 
 ---
 
+## Autonomous AI SRE Agent API
+
+Pulse includes an autonomous agent loop that executes the **Observe ➔ Think ➔ Plan ➔ Execute ➔ Evaluate** process on detected incidents. It runs diagnostics tools, triggers Groq AI reasoning, issues alerts, monitors recovery, and auto-resolves incidents.
+
+### POST /agent/analyze
+Trigger a new asynchronous autonomous SRE investigation on an active incident.
+
+**Request body:**
+```json
+{
+  "incidentId": "6a13eda106bb46e598dd4e41"
+}
+```
+
+**Response 202:**
+```json
+{
+  "sessionId": "1779690913909-4788",
+  "incidentId": "6a13eda106bb46e598dd4e41",
+  "state": "pending",
+  "message": "Autonomous investigation started — connect to /ws for real-time updates"
+}
+```
+
+---
+
+### GET /agent/status
+Get current execution phase, details, and dynamic AI diagnosis for an incident session.
+
+**Query Parameters:**
+* `incidentId` (optional): Retrieve the latest session for a specific incident. If omitted, returns the latest active/completed session overall.
+
+**Response 200:**
+```json
+{
+  "sessionId": "1779690913909-4788",
+  "incidentId": "6a13eda106bb46e598dd4e41",
+  "state": "completed",
+  "startedAt": "2026-05-25T12:04:53Z",
+  "updatedAt": "2026-05-25T12:05:43Z",
+  "reasoning": {
+    "cause": "Connection pool exhaustion and upstream service unavailability causing high error rate",
+    "confidence": 0.95,
+    "severity": "critical",
+    "action": "escalate",
+    "reasoning": "8 HTTP 500 exceptions occurred during checkout processing within a 5-minute window. Database pool exhaustion is critical.",
+    "tools": ["fetch_logs", "fetch_metrics", "send_alert", "monitor_recovery"]
+  }
+}
+```
+
+**Agent States:** `idle` | `pending` | `executing` | `completed` | `failed`
+
+---
+
+### GET /agent/thoughts
+Fetch the real-time reasoning and thought logs of the investigation session.
+
+**Response 200:**
+```json
+{
+  "sessionId": "1779690913909-4788",
+  "incidentId": "6a13eda106bb46e598dd4e41",
+  "state": "executing",
+  "thoughts": [
+    "🔍 Starting autonomous SRE investigation...",
+    "📋 Incident: 8 HTTP 5xx errors detected in the last 5 minutes on demo-shopfast - Severity: Critical",
+    "📊 Fetching recent logs for error pattern analysis...",
+    "🧠 Reasoning over evidence with AI analysis...",
+    "📌 Root cause identified: connection pool exhaustion (confidence: 95%)",
+    "⚡ Chosen action: escalate - executing plan: [fetch_logs fetch_metrics send_alert monitor_recovery]"
+  ]
+}
+```
+
+---
+
+### GET /agent/actions
+Fetch the exact history of diagnostic SRE tools executed by the agent, their status, input arguments, and returning text outputs.
+
+**Response 200:**
+```json
+{
+  "sessionId": "1779690913909-4788",
+  "actions": [
+    {
+      "id": "fetch_logs-1779690915120",
+      "tool": "fetch_logs",
+      "status": "completed",
+      "input": "map[service:demo-shopfast sessionId:1779690913909-4788]",
+      "output": "Recent logs for service 'demo-shopfast' (last 10 min):\n  [🔴] POST /api/checkout → 500 (1250ms) | err=\"connection pool exhausted\"\n  ...\nSummary: 8 total | 8 errors (100.0% error rate)\n",
+      "startedAt": "2026-05-25T12:04:54Z",
+      "endedAt": "2026-05-25T12:04:55Z"
+    }
+  ]
+}
+```
+
+---
+
+### POST /agent/demo
+Trigger the full **90-second autonomous SRE lifecycle demo**. This does not require any external SDK traffic:
+1. Automatically injects synthetic error traffic logs into the database.
+2. Registers a new active incident.
+3. Spawns the autonomous PulseAgent to investigate, query metrics, run Groq diagnostic analysis, and broadcast its thoughts.
+4. Auto-injects healthy traffic after 40 seconds to simulate a live recovery.
+5. Polls recovery and marks the incident resolved.
+
+**Response 202:**
+```json
+{
+  "sessionId": "1779690913909-4788",
+  "incidentId": "6a13eda106bb46e598dd4e41",
+  "state": "pending",
+  "message": "🎭 Demo started — autonomous agent is investigating. Connect to /ws for live updates.",
+  "pollUrl": "/agent/thoughts?incidentId=6a13eda106bb46e598dd4e41",
+  "recoveryIn": "40 seconds — healthy traffic will be injected automatically"
+}
+```
+
+---
+
+### WebSocket Agent Events (`ws://host/ws`)
+
+During execution, the agent broadcasts events on the `/ws` hub:
+
+#### 1. Real-time Agent Thoughts (`agent_thought`)
+```json
+{
+  "type": "agent_thought",
+  "sessionId": "1779690913909-4788",
+  "payload": {
+    "thought": "📊 Fetching recent logs for error pattern analysis...",
+    "timestamp": "2026-05-25T12:04:54Z"
+  }
+}
+```
+
+#### 2. Tool Execution Updates (`agent_action`)
+```json
+{
+  "type": "agent_action",
+  "sessionId": "1779690913909-4788",
+  "payload": {
+    "id": "fetch_logs-1779690915120",
+    "tool": "fetch_logs",
+    "status": "executing",
+    "startedAt": "2026-05-25T12:04:54Z"
+  }
+}
+```
+
+#### 3. Investigation Complete (`agent_complete`)
+Broadcasts the final complete session context including the AI's final diagnosis and recovery status.
+
+---
+
 ## Error Response Format
 
 All error responses use a consistent envelope:
